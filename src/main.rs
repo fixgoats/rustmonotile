@@ -1,420 +1,539 @@
+use nannou::color::{
+    BEIGE, BLACK, BLUE, BLUEVIOLET, CYAN, DARKBLUE, GREEN, MAGENTA, MISTYROSE, ORANGE, PLUM, RED,
+    STEELBLUE, TURQUOISE, VIOLET, WHEAT, WHITE, YELLOWGREEN,
+};
+use nannou::geom::{Range, Rect, pt2, pt3};
+use nannou::wgpu::Texture;
+use nannou::{App, Frame};
+use nannou::{app, glam};
+use nannou::{geom, prelude};
+use std::f64::consts::PI;
 use std::fs::File;
 use std::io::Write;
-use std::ops::{Add, Sub, Mul, Div, Index, IndexMut};
-use std::mem::MaybeUninit;
 
-#[derive(Debug)]
-pub struct Node<T> {
-    first_outgoing_edge: Option<usize>,
-    data: T,
+use graphtiling::*;
+
+const SQ3: f64 = 1.7320508075688772935;
+
+fn hex_pt(x: f64, y: f64) -> Vec2 {
+    v2![x + 0.5 * y, 0.5 * SQ3 * y]
 }
 
-#[derive(Debug)]
-pub struct Edge<T> {
-    target: usize,
-    next_outgoing_edge: Option<usize>,
-    data: T,
+const HAT: [Vec2; 13] = [
+    v2![0., 0.],
+    v2![-0.75, -0.25 * SQ3],
+    v2![-0.5, -0.5 * SQ3],
+    v2![0.5, -0.5 * SQ3],
+    v2![0.75, -0.25 * SQ3],
+    v2![1.5, -0.5 * SQ3],
+    v2![2.25, -0.25 * SQ3],
+    v2![2., 0.],
+    v2![1.5, 0.],
+    v2![1.5, 0.5 * SQ3],
+    v2![0.75, 0.75 * SQ3],
+    v2![0.5, 0.5 * SQ3],
+    v2![0., 0.5 * SQ3],
+];
+const HAT1: [Vec2; 13] = [
+    v2![0., 0.],
+    v2![0.75, -0.25 * SQ3],
+    v2![0.5, -0.5 * SQ3],
+    v2![-0.5, -0.5 * SQ3],
+    v2![-0.75, -0.25 * SQ3],
+    v2![-1.5, -0.5 * SQ3],
+    v2![-2.25, -0.25 * SQ3],
+    v2![-2., 0.],
+    v2![-1.5, 0.],
+    v2![-1.5, 0.5 * SQ3],
+    v2![-0.75, 0.75 * SQ3],
+    v2![-0.5, 0.5 * SQ3],
+    v2![0., 0.5 * SQ3],
+];
+
+fn vec2_to_nannou(v: Vec2) -> geom::Vec2 {
+    pt2(v[0] as f32, v[1] as f32)
 }
 
-#[derive(Debug)]
-pub struct Graph<ND, ED> {
-    pub nodes: Vec<Node<ND>>,
-    pub edges: Vec<Edge<ED>>,
+#[derive(Clone, Copy, Debug)]
+enum Meta {
+    Hexa,
+    Tri,
+    Para,
+    Penta,
+    Super,
 }
 
-pub struct Successors<'graph, ND, ED> {
-    graph: &'graph Graph<ND, ED>,
-    current_edge_index: Option<usize>,
+#[derive(Clone, Copy, Debug)]
+enum HatType {
+    H1,
+    H,
 }
 
-pub struct EdgeSuccessors<'graph, ND, ED> {
-    graph: &'graph Graph<ND, ED>,
-    current_edge_index: Option<usize>,
+#[derive(Clone, Copy, Debug)]
+struct HatTile {
+    t: HatType,
+    trans: Affine2,
 }
 
-impl<ND, ED> Index<usize> for Graph<ND, ED> {
-    type Output = Node<ND>;
-    fn index<'a>(&'a self, i: usize) -> &'a Node<ND> {
-        &self.nodes[i]
-    }
-}
-
-impl<ND, ED> IndexMut<usize> for Graph<ND, ED> {
-    fn index_mut<'a>(&'a mut self, i: usize) -> &'a mut Node<ND> {
-        &mut self.nodes[i]
-    }
-}
-
-
-impl<'graph, N, E> Iterator for EdgeSuccessors<'graph, N, E> {
-    type Item = &'graph Edge<E>;
-
-    fn next(&mut self) -> Option<&'graph Edge<E>> {
-        match self.current_edge_index {
-            None => None,
-            Some(edge_num) => {
-                let edge = &self.graph.edges[edge_num];
-                self.current_edge_index = edge.next_outgoing_edge;
-                Some(edge)
-            }
-        }
-    }
-}
-
-impl<'graph, N, E> Iterator for Successors<'graph, N, E> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<usize> {
-        match self.current_edge_index {
-            None => None,
-            Some(edge_num) => {
-                let edge = &self.graph.edges[edge_num];
-                self.current_edge_index = edge.next_outgoing_edge;
-                Some(edge.target)
-            }
-        }
-    }
-}
-
-impl<ND, ED> Graph<ND, ED> {
-    pub fn new() -> Self {
+impl HatTile {
+    fn new() -> Self {
         Self {
-            nodes: Vec::new(),
-            edges: Vec::new(),
+            t: HatType::H,
+            trans: Affine2::id(),
         }
     }
-
-    pub fn add_node(&mut self, data: ND) {
-        self.nodes.push(Node {
-            first_outgoing_edge: None,
-            data,
-        });
-    }
-
-    pub fn nodes_from_data(&mut self, other: Vec<ND>) {
-        self.nodes = other.into_iter().map(|d| Node {first_outgoing_edge: None, data: d}).collect();
-    }
-
-    pub fn add_edge(&mut self, source: usize, target: usize, data: ED) {
-        let edge_index = self.edges.len();
-        let node_data = &mut self.nodes[source];
-        self.edges.push(Edge {
-            target,
-            next_outgoing_edge: node_data.first_outgoing_edge,
-            data,
-        });
-        node_data.first_outgoing_edge = Some(edge_index);
-    }
-
-    pub fn successors<'a>(&'a self, source: usize) -> Successors<'a, ND, ED> {
-        let first_outgoing_edge = self.nodes[source].first_outgoing_edge;
-        Successors {
-            graph: self,
-            current_edge_index: first_outgoing_edge,
-        }
-    }
-    pub fn edge_successors<'a>(&'a self, source: usize) -> EdgeSuccessors<'a, ND, ED> {
-        let first_outgoing_edge = self.nodes[source].first_outgoing_edge;
-        EdgeSuccessors {
-            graph: self,
-            current_edge_index: first_outgoing_edge,
-        }
+    fn points(self) -> [Vec2; 13] {
+        let mut h = match self.t {
+            HatType::H1 => HAT1,
+            _ => HAT,
+        };
+        h.iter_mut().for_each(|x| *x = self.trans * *x);
+        h
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-struct Vec2 {
-    data: [f64;2],
+#[derive(Clone, Debug)]
+struct MetaTile {
+    t: Meta,
+    children: Vec<MetaTile>,
+    shape: Vec<Vec2>,
+    trans: Affine2,
+    width: f64,
 }
 
-macro_rules! v2 {
-    ( $a:expr, $b:expr ) => {
-        Vec2 {data: [$a, $b]}
-    };
-}
-
-impl Index<usize> for Vec2 {
-    type Output = f64;
-    fn index<'a>(&'a self, i: usize) -> &'a f64 {
-        &self.data[i]
-    }
-}
-
-impl IndexMut<usize> for Vec2 {
-    fn index_mut<'a>(&'a mut self, i: usize) -> &'a mut f64 {
-        &mut self.data[i]
-    }
-}
-
-impl Add for Vec2 {
-    type Output = Self;
-    fn add(self, other: Self) -> Self {
-        Self {data: [self[0] + other[0], self[1] + other[1]]}
-    }
-}
-
-impl Sub for Vec2 {
-    type Output = Self;
-    fn sub(self, other: Self) -> Self {
-        Self {data: [self[0] - other[0], self[1] - other[1]]}
-    }
-}
-
-// impl Mul<f64> for Vec2 {
-//     type Output = Self;
-//     fn mul(self, other: f64) -> Self {
-//         Self {data: [other * self[0], other * self[1]]}
-//     }
-// }
-
-impl Div<f64> for Vec2 {
-    type Output = Self;
-    fn div(self, other: f64) -> Self {
-        Self {data: [self[0] / other, self[1] / other]}
-    }
-}
-
-impl Vec2 {
-    fn sqnorm(&self) -> f64 {
-        self[0] * self[0] + self[1] * self[1]
-    }
-    fn norm(&self) -> f64 {
-        self.sqnorm().sqrt()
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-struct Point {
-    p: Vec2,
-    t: u8,
-}
-
-impl Add<Vec2> for Point {
-    type Output = Self;
-    fn add(self, other: Vec2) -> Self {
-        Self{p: self.p + other, t: self.t}
-    }
-}
-
-impl Sub<Vec2> for Point {
-    type Output = Self;
-    fn sub(self, other: Vec2) -> Self {
-        Self{p: self.p - other, t: self.t}
-    }
-}
-
-impl Sub for Point {
-    type Output = Vec2;
-    fn sub(self, other: Self) -> Vec2 {
-        self.p - other.p
-    }
-}
-
-
-fn mymul<T>(lhs: Vec2, _rhs: T) -> Vec2
-where T: Mul<f64, Output=f64> + Copy {
-    v2![_rhs * lhs[0], _rhs * lhs[1]]
-}
-
-macro_rules! commutative {
-    ($op:ident, $opfunc:ident, $my_type:ty, $output_type:ty, $func:ident) => (
-        impl $op for $my_type {
-            type Output = $output_type;
-            fn $opfunc(self, _rhs: $my_type) -> $output_type {
-                $func(self, _rhs)
+fn filterpts(pts: Vec<Vec2>, tol: f64) -> Vec<Vec2> {
+    let mut ret = Vec::<Vec2>::with_capacity(pts.len());
+    for pt in pts {
+        let mut matched = false;
+        for p in &ret {
+            if (*p - pt).norm() < tol {
+                matched = true;
             }
         }
-    );
-    ($op:ident, $opfunc:ident, $my_type:ty, $other_type:ty, $output_type:ty, $func:ident) => (
-        impl $op<$other_type> for $my_type {
-            type Output = $output_type;
-            fn $opfunc(self, _rhs: $other_type) -> $output_type {
-                $func(self, _rhs)
-            }
+        if !matched {
+            ret.push(pt);
         }
-        impl $op<$my_type> for $other_type {
-            type Output = $output_type;
-            fn $opfunc(self, _rhs: $my_type) -> $output_type {
-                $func(_rhs, self)
-            }
-        }
-    )
-}
-
-commutative!(Mul, mul, Vec2, f64, Vec2, mymul);
-
-macro_rules! p {
-    ($a:expr, $b:expr, $c:expr) => {
-        Point {p: v2![$a, $b], t: $c}
-    };
-    ($v:expr, $c:expr) => {
-        Point {p: $v, t: $c}
-    };
-}
-
-fn initialize_vec_with_length<T>(len: usize) -> Vec<MaybeUninit<T>> {
-    std::iter::repeat_with(MaybeUninit::<T>::uninit).take(len).collect()
-}
-
-fn rot_type_by_n(t: u8, n: u8) -> u8 {
-    (t + n) % 6
-}
-
-fn rot_by_n(t: [u8; 8], n: u8) -> [u8; 8] {
-    let mut ret: [u8; 8] = [0; 8];
-    for i in 0..8 {
-        ret[i] = rot_type_by_n(t[i], n);
     }
     ret
 }
 
-fn mirror_type(t: u8) -> u8 {
-    (5 * t + 1) % 6
-}
-
-fn mirror(t: [u8; 8]) -> [u8; 8] {
-    let mut ret: [u8; 8] = [0; 8];
-    for i in 0..8 {
-        ret[i] = mirror_type(t[i]);
-    }
-    ret
-}
-
-fn euclid_mod(a: i8, b: i8) -> u8 {
-    match a < 0 {
-        true => ((a + b) % b) as u8,
-        false => (a % b) as u8,
-    }
-}
-
-fn main() -> std::io::Result<()>{
-    let sq3 = 3.0f64.sqrt();
-    let base : [Vec2; 6] = [v2![-0.5, 0.5 * sq3], v2![0.5, 0.5 * sq3], v2![1., 0.], v2![0.5, -0.5 * sq3], v2![-0.5, 0.5 * sq3], v2![-1., 0.]];
-    let basis1 = v2![(3. + sq3) / 2., (1. + sq3) / 2.];
-    let basis2 = v2![0., 1. + sq3];
-
-    let n = 4;
-    // let points: Vec<Point> = (0..100).flat_map(|i| (0..100).map(move |j| Point{p:base[0] + basis1 * (i as f64) + basis2 * (j as f64), t: 0 as u8})).collect();
-    let mut g: Graph<Point, u8> = Graph::new();
-    {
-        let points: Vec<Point> = (0..n).flat_map(|i| (0..n).flat_map(move |j| (0..6).map(move |k| p![base[k] +  (i as f64) * basis1  + (j as f64) * basis2, k as u8]))).collect();
-        g.nodes_from_data(points);
-    }
-
-    for i in 0..g.nodes.len() {
-        for j in (i+1)..g.nodes.len() {
-            if (g.nodes[j].data - g.nodes[i].data).sqnorm() > 1.01 {
-                g.add_edge(i, j, g.nodes[j].data.t);
-                g.add_edge(j, i, g.nodes[i].data.t);
+impl MetaTile {
+    fn hats(&self) -> Vec<HatTile> {
+        match self.t {
+            Meta::Hexa => {
+                vec![
+                    HatTile {
+                        t: HatType::H,
+                        trans: self.trans * Affine2::from_rot(-2. * PI / 3.).trans(v2![1., SQ3]),
+                    },
+                    HatTile {
+                        t: HatType::H,
+                        trans: self.trans * Affine2::from_rot(-2. * PI / 3.).trans(v2![4.0, SQ3]),
+                    },
+                    HatTile {
+                        t: HatType::H,
+                        trans: self.trans
+                            * Affine2::from_rot(2. * PI / 3.).trans(v2![2.5, 1.5 * SQ3]),
+                    },
+                    HatTile {
+                        t: HatType::H1,
+                        trans: self.trans * Affine2::from_rot(-PI / 3.).trans(v2![2.5, 0.5 * SQ3]),
+                    },
+                ]
+            }
+            Meta::Tri => {
+                vec![HatTile {
+                    t: HatType::H,
+                    trans: self.trans.trans(v2![0.5, 0.5 * SQ3]),
+                }]
+            }
+            Meta::Super => self
+                .children
+                .iter()
+                .map(|mt| {
+                    let mut ret = mt.hats();
+                    ret.iter_mut().for_each(|h| h.trans *= self.trans);
+                    ret
+                })
+                .flatten()
+                .collect(),
+            _ => {
+                vec![
+                    HatTile {
+                        t: HatType::H,
+                        trans: self.trans * Affine2::from_rot(-PI / 3.).trans(v2![0., SQ3]),
+                    },
+                    HatTile {
+                        t: HatType::H,
+                        trans: self.trans * Affine2::from_trans(v2![1.5, 0.5 * SQ3]),
+                    },
+                ]
             }
         }
     }
-    let mut occupied: Vec<bool> = std::iter::repeat(false).take(g.nodes.len()).collect();
-    let hat : [u8; 8] = [0, 1, 2, 3, 5, 0, 4, 3];
-    let mirror_hat = mirror(hat);
-    let mut hats : Vec<[usize; 8]> = Vec::with_capacity(n * n);
-    for i in 0..g.nodes.len() {
-        if !occupied[i] {
-            println!("Checking tile {}", i);
-            for j in 0..8 {
-                let necessary_rot = euclid_mod((g.nodes[i].data.t as i8) - (hat[j] as i8), 6);
-                println!("Rotating hat by {} to match tile.", necessary_rot);
-                let try_hat = rot_by_n(hat, necessary_rot);
-                let mut occupied_indices: [usize; 8]= [0; 8];
-                let mut matched: [bool; 8]= [false; 8];
-                matched[j] = true;
-                occupied_indices[j] = i;
-                let mut test_site = i;
-                for k in j-1..=0 {
-                    for edge in g.edge_successors(test_site) {
-                        // println!("Target tile is of type {}, current hat tile is of type {}", edge.data, try_hat[k]);
-                        if edge.data == try_hat[k] {
-                            // println!("Tiles matched, target tile's occupation is: {}", occupied[edge.target]);
-                            if occupied[edge.target] {
-                                break;
-                            } else {
-                                test_site = edge.target;
-                                matched[k] = true;
-                                occupied_indices[k] = test_site;
+    fn to_points(&self) -> Vec<Vec2> {
+        let hats = self.hats();
+        let points: Vec<Vec2> = hats.iter().flat_map(|h| h.points()).collect();
 
-                            }
-                        }
-                    }                        
-                }
-                test_site = i;
-                for k in j+1..8 {
-                    for edge in g.edge_successors(test_site) {
-                        // println!("Target tile is of type {}, current hat tile is of type {}", edge.data, try_hat[k]);
-                        if edge.data == try_hat[k]{
-                            // println!("Tiles matched, target tile's occupation is: {}", occupied[edge.target]);
-                            if occupied[edge.target] {
-                                break;
-                            } else {
-                                test_site = edge.target;
-                                matched[k] = true;
-                                occupied_indices[k] = test_site;
-                            }
-                        }
-                    }                        
-                }
-                println!("matched: {:?}", matched);
-                if matched.iter().all(|&x| x) {
-                    for idx in occupied_indices { occupied[idx] = true; }
-                    println!("Occupied indices: {:?}", occupied);
-                    hats.push(occupied_indices);
-                } else {
-                    println!("Unmirrored hat didn't match, trying mirror");
-                    let necessary_rot = euclid_mod((g.nodes[i].data.t as i8) - (hat[j] as i8), 6);
-                    println!("Rotating hat by {} to match tile.", necessary_rot);
-                    let try_hat = rot_by_n(mirror_hat, necessary_rot);
-                    let mut occupied_indices: [usize; 8]= [0; 8];
-                    let mut matched: [bool; 8]= [false; 8];
-                    matched[j] = true;
-                    occupied_indices[j] = i;
-                    let mut test_site = i;
-                    for k in j-1..=0 {
-                        for edge in g.edge_successors(test_site) {
-                        // println!("Target tile is of type {}, current hat tile is of type {}", edge.data, try_hat[k]);
-                        if edge.data == try_hat[k]{
-                            if occupied[edge.target] {
-                            // println!("Tiles matched, target tile's occupation is: {}", occupied[edge.target]);
-                                break;
-                                } else {
-                                    test_site = edge.target;
-                                    matched[k] = true;
-                                    occupied_indices[k] = test_site;
-                                }
-                            }
-                        }                        
-                    }
-                    test_site = i;
-                    for k in j+1..8 {
-                        for edge in g.edge_successors(test_site) {
-                        // println!("Target tile is of type {}, current hat tile is of type {}", edge.data, try_hat[k]);
-                        if edge.data == try_hat[k]{
-                            // println!("Tiles matched, target tile's occupation is: {}", occupied[edge.target]);
-                            if occupied[edge.target] {
-                                break;
-                                } else {
-                                    test_site = edge.target;
-                                    matched[k] = true;
-                                    occupied_indices[k] = test_site;
-                                }
-                            }
-                        }                        
-                    }
-                    if matched.iter().all(|&x| x) {
-                        for idx in occupied_indices { occupied[idx] = true; }
-                        println!("Occupied indices: {:?}", occupied);
-                        hats.push(occupied_indices);
-                    }
-                }
-            }
+        filterpts(points, 1e-14)
+    }
+    fn to_polys(&self) -> Vec<[Vec2; 13]> {
+        let hats = self.hats();
+        hats.iter().map(|h| h.points()).collect()
+    }
+}
+
+macro_rules! tern {
+    ($cond:expr, $true_path:expr, $false_path:expr) => {
+        match $cond {
+            true => $true_path,
+            false => $false_path,
+        }
+    };
+}
+
+fn view(app: &App, model: &Model, frame: Frame) {
+    // let yreflection = Affine2::from_cols(pt2(1., 0.), pt2(0., -1.), pt2(0., 1.));
+    frame.clear(WHITE);
+    let draw = app.draw();
+
+    let colors = [
+        PLUM,
+        BEIGE,
+        BLUE,
+        GREEN,
+        RED,
+        YELLOWGREEN,
+        MISTYROSE,
+        ORANGE,
+    ];
+    for i in 0..model.hats.len() {
+        let pts = model.hats[i];
+        draw.polygon()
+            .color(colors[i % 8])
+            .stroke(BLACK)
+            .points(pts);
+    }
+    for p in &model.points {
+        draw.ellipse().color(BLACK).radius(3.0).xy(*p);
+    }
+    draw.polyline()
+        .color(BLACK)
+        .points_closed(model.outline.clone());
+
+    draw.to_frame(app, &frame).unwrap();
+}
+
+struct Model {
+    ll: Vec2,
+    ur: Vec2,
+    hats: Vec<[geom::Vec2; 13]>,
+    points: Vec<geom::Vec2>,
+    outline: Vec<geom::Vec2>,
+    window_id: nannou::window::Id,
+}
+
+fn hat_to_nannou(poly: &[Vec2; 13]) -> [geom::Vec2; 13] {
+    let mut nannou_hat = [geom::Vec2::ZERO; 13];
+    for i in 0..13 {
+        nannou_hat[i] = vec2_to_nannou(poly[i]);
+    }
+    nannou_hat
+}
+
+fn apply_to_hat(trans: Affine2, poly: &[Vec2; 13]) -> [Vec2; 13] {
+    let mut new_hat = [Vec2::zero(); 13];
+    for i in 0..13 {
+        new_hat[i] = trans * poly[i]
+    }
+    new_hat
+}
+
+fn constructpatch(h: MetaTile, t: MetaTile, p: MetaTile, f: MetaTile) -> MetaTile {
+    let rules = vec![
+        vec![0],
+        vec![2, 0, 0, 2],
+        vec![0, 1, 0, 2],
+        vec![2, 2, 0, 2],
+        vec![0, 3, 0, 2],
+        vec![2, 4, 4, 2],
+        vec![3, 0, 4, 3],
+        vec![3, 2, 4, 3],
+        vec![3, 4, 1, 3, 2, 0],
+        vec![0, 8, 3, 0],
+        vec![2, 9, 2, 0],
+        vec![0, 10, 2, 0],
+        vec![2, 11, 4, 2],
+        vec![0, 12, 0, 2],
+        vec![3, 13, 0, 3],
+        vec![3, 14, 2, 1],
+        vec![0, 15, 3, 4],
+        vec![3, 8, 2, 1],
+        vec![0, 17, 3, 0],
+        vec![2, 18, 2, 0],
+        vec![0, 19, 2, 2],
+        vec![3, 20, 4, 3],
+        vec![2, 20, 0, 2],
+        vec![0, 22, 0, 2],
+        vec![3, 23, 4, 3],
+        vec![3, 23, 0, 3],
+        vec![2, 16, 0, 2],
+        vec![1, 9, 4, 0, 2, 2],
+        vec![3, 4, 0, 3],
+    ];
+
+    let mut ret = MetaTile {
+        children: vec![],
+        width: h.width,
+        t: Meta::Super,
+        shape: vec![],
+        trans: Affine2::id(),
+    };
+    let shapes = [h, t, p, f];
+
+    for r in rules {
+        if r.len() == 1 {
+            ret.children.push(shapes[0].clone());
+        } else if r.len() == 4 {
+            let poly = ret.children[r[1]].shape.clone();
+            let transform = ret.children[r[1]].trans;
+            let p = transform * poly[(r[2] + 1) % poly.len()];
+            let q = transform * poly[r[2]];
+            let mut nshp = shapes[r[0]].clone();
+            let npoly = &nshp.shape;
+            let match_trans =
+                Affine2::match_segs(npoly[r[3]], npoly[(r[3] + 1) % npoly.len()], p, q);
+            nshp.trans *= match_trans;
+            ret.children.push(nshp);
+        } else {
+            let ch_p = ret.children[r[1]].clone();
+            let ch_q = ret.children[r[3]].clone();
+
+            let p = ch_q.trans * ch_q.shape[r[4]];
+            let q = ch_p.trans * ch_p.shape[r[2]];
+            let mut nshp = shapes[r[0]].clone();
+            let npoly = &nshp.shape;
+            nshp.trans *= Affine2::match_segs(npoly[r[5]], npoly[(r[5] + 1) % npoly.len()], p, q);
+
+            ret.children.push(nshp);
         }
     }
-    let mut file = File::create("foo.txt")?;
-    for h in hats {
-        write!(&mut file, "{} {} {} {} {} {} {} {}\n", h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7])?;
+
+    return ret;
+}
+
+fn construct_metatiles(patch: MetaTile) -> [MetaTile; 4] {
+    let bps1 = patch.children[8].to_points()[2];
+    let bps2 = patch.children[21].to_points()[2];
+    let rbps = Affine2::rot_about(-2.0 * PI / 3.0, bps1) * bps2;
+
+    let p72 = patch.children[7].to_points()[2];
+    let p252 = patch.children[25].to_points()[2];
+
+    let llc = intersection(bps1, rbps, patch.children[6].to_points()[2], p72);
+    let mut w = patch.children[6].to_points()[2] - llc;
+
+    let mut new_h_outline = vec![llc, bps1];
+    w = Affine2::from_rot(-PI / 3.) * w;
+    new_h_outline.push(new_h_outline[1] + w);
+    new_h_outline.push(patch.children[14].to_points()[2]);
+    w = Affine2::from_rot(-PI / 3.) * w;
+    new_h_outline.push(new_h_outline[3] - w);
+    new_h_outline.push(patch.children[6].to_points()[2]);
+
+    let new_h = MetaTile {
+        t: Meta::Super,
+        shape: new_h_outline.clone(),
+        width: patch.width * 2.,
+        children: [0, 9, 16, 27, 26, 6, 1, 8, 10, 15]
+            .iter()
+            .map(|&ch| patch.children[ch].clone())
+            .collect(),
+        trans: Affine2::id(),
+    };
+
+    let new_p_outline = vec![p72, p72 + bps1 - llc, bps1, llc];
+    let new_p = MetaTile {
+        t: Meta::Super,
+        shape: new_p_outline,
+        width: patch.width * 2.,
+        children: [7, 2, 3, 4, 28]
+            .iter()
+            .map(|&ch| patch.children[ch].clone())
+            .collect(),
+        trans: Affine2::id(),
+    };
+
+    let new_f_outline = vec![
+        bps2,
+        patch.children[24].to_points()[2],
+        patch.children[25].to_points()[0],
+        p252,
+        p252 + llc - bps1,
+    ];
+    let new_f = MetaTile {
+        t: Meta::Super,
+        shape: new_f_outline,
+        children: [21, 20, 22, 23, 24, 25]
+            .iter()
+            .map(|&ch| patch.children[ch].clone())
+            .collect(),
+        trans: Affine2::id(),
+        width: patch.width * 2.,
+    };
+
+    let aaa = new_h_outline[2];
+    let bbb = new_h_outline[1] + new_h_outline[4] - new_h_outline[5];
+    let ccc = Affine2::rot_about(-PI / 3., bbb) * aaa;
+    let new_t_outline = vec![bbb, ccc, aaa];
+    let new_t = MetaTile {
+        t: Meta::Super,
+        shape: new_t_outline,
+        width: patch.width * 2.,
+        children: vec![patch.children[11].clone()],
+        trans: Affine2::id(),
+    };
+
+    return [new_h, new_t, new_p, new_f];
+}
+
+fn model(app: &App) -> Model {
+    let win_id = app.new_window().size(700, 700).view(view).build().unwrap();
+
+    // let init = MetaTile {
+    //     t: Meta::Hexa,
+    //     trans: Affine2::id(),
+    // };
+    // let children = init.descendants();
+    // let grandchildren: Vec<MetaTile> = children.iter().flat_map(|mt| mt.descendants()).collect();
+    // let points: Vec<Vec2> = filterpts(
+    //     grandchildren.iter().flat_map(|mt| mt.to_points()).collect(),
+    //     1e-14,
+    // );
+    // let win = app.window_rect();
+    // let bleh = win.x.end;
+    // let blah = win.y.end;
+    // let scale = bleh.min(blah);
+
+    // let vmin: Vec2 = points
+    //     .iter()
+    //     .fold(v2![0., 0.], |v, u| v2![v[0].min(u[0]), v[1].min(u[1])]);
+
+    // let vmax: Vec2 = points
+    //     .iter()
+    //     .fold(v2![0., 0.], |v, u| v2![v[0].max(u[0]), v[1].max(u[1])]);
+
+    // let translation: Vec2 = (vmax + vmin) * 0.5;
+    // let lenvec = vmax - vmin;
+    // let scalevec = vmax - translation;
+    // let max_dim = scalevec.max();
+    // let scalemat = mat2![
+    //     scale as f64 / (max_dim + 0.05 * lenvec[0]),
+    //     0.,
+    //     0.,
+    //     scale as f64 / (max_dim + 0.05 * lenvec[1])
+    // ];
+    // let transf = Affine2::from_trans(-translation).matmul(scalemat);
+    // let polys = grandchildren
+    //     .into_iter()
+    //     .flat_map(|mt| {
+    //         mt.to_polys()
+    //             .iter()
+    //             .map(|h| hat_to_nannou(&apply_to_hat(transf, h)))
+    //             .collect::<Vec<[geom::Vec2; 13]>>()
+    //     })
+    //     .collect();
+    let init_h = MetaTile {
+        t: Meta::Hexa,
+        children: vec![],
+        shape: vec![
+            v2![0., 0.],
+            v2![4., 0.],
+            v2![4.5, 0.5 * SQ3],
+            v2![2.5, 2.5 * SQ3],
+            v2![1.5, 2.5 * SQ3],
+            v2![-0.5, 0.5 * SQ3],
+        ],
+        width: 2.,
+        trans: Affine2::id(),
+    };
+    let init_t = MetaTile {
+        t: Meta::Tri,
+        children: vec![],
+        shape: vec![v2![0., 0.], v2![3., 0.], v2![1.5, 1.5 * SQ3]],
+        width: 2.,
+        trans: Affine2::id(),
+    };
+    let init_p = MetaTile {
+        t: Meta::Para,
+        children: vec![],
+        shape: vec![v2![0., 0.], v2![4., 0.], v2![3., SQ3], v2![-1., SQ3]],
+        width: 2.,
+        trans: Affine2::id(),
+    };
+    let init_f = MetaTile {
+        t: Meta::Penta,
+        children: vec![],
+        shape: vec![
+            v2![0., 0.],
+            v2![3., 0.],
+            v2![3.5, 0.5 * SQ3],
+            v2![3., SQ3],
+            v2![-1., SQ3],
+        ],
+        width: 2.,
+        trans: Affine2::id(),
+    };
+    let patch = constructpatch(init_h, init_t, init_p, init_f);
+    let tiles = construct_metatiles(patch);
+    let points = tiles[0].to_points();
+    let win = app.window_rect();
+    let bleh = win.x.end;
+    let blah = win.y.end;
+    let scale = bleh.min(blah);
+
+    let vmin: Vec2 = points
+        .iter()
+        .fold(v2![0., 0.], |v, u| v2![v[0].min(u[0]), v[1].min(u[1])]);
+
+    let vmax: Vec2 = points
+        .iter()
+        .fold(v2![0., 0.], |v, u| v2![v[0].max(u[0]), v[1].max(u[1])]);
+
+    let translation: Vec2 = (vmax + vmin) * 0.5;
+    let lenvec = vmax - vmin;
+    let scalevec = vmax - translation;
+    let max_dim = scalevec.max();
+    let scalemat = mat2![
+        scale as f64 / (max_dim + 0.05 * lenvec[0]),
+        0.,
+        0.,
+        scale as f64 / (max_dim + 0.05 * lenvec[1])
+    ];
+    let transf = Affine2::from_trans(-translation).matmul(scalemat);
+    let polys = tiles[0]
+        .clone()
+        .to_polys()
+        .iter()
+        .map(|h| hat_to_nannou(&apply_to_hat(transf, h)))
+        .collect::<Vec<[geom::Vec2; 13]>>();
+    let outline: Vec<geom::Vec2> = tiles[0]
+        .clone()
+        .shape
+        .into_iter()
+        .map(|p| vec2_to_nannou(transf * p))
+        .collect();
+
+    Model {
+        ll: vmin,
+        ur: vmax,
+        hats: polys,
+        points: points.iter().map(|&v| vec2_to_nannou(transf * v)).collect(),
+        outline,
+        window_id: win_id,
     }
-    Ok(())
+}
+
+fn main() {
+    nannou::app(model).run();
 }

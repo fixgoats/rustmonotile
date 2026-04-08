@@ -20,7 +20,7 @@ points = np.concatenate([base + i * a1 + j * a2 for i in range(100) for j in ran
 clusters = np.loadtxt("foo.txt", dtype=int)
 
 for i in range(np.shape(clusters)[0]):
-    plt.scatter(points[clusters[i,:]])
+    plt.scatter(points[clusters[i,:], 0], points[clusters[i,:], 1])
 
 plt.show()
 

@@ -1,3 +1,4 @@
+use log::{debug, error, info, trace, warn};
 use std::ops::{Add, AddAssign, Div, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
 
 macro_rules! commutative {
@@ -151,26 +152,36 @@ impl<ND, ED> Graph<ND, ED> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct Vec2 {
-    pub data: [f64; 2],
+    //pub data: [f64; 2],
+    pub x: f64,
+    pub y: f64,
 }
 
 #[macro_export]
 macro_rules! v2 {
     ( $a:expr, $b:expr ) => {
-        Vec2 { data: [$a, $b] }
+        Vec2 { x: $a, y: $b }
     };
 }
 
 impl Index<usize> for Vec2 {
     type Output = f64;
     fn index<'a>(&'a self, i: usize) -> &'a f64 {
-        &self.data[i]
+        match i {
+            0 => &self.x,
+            1 => &self.y,
+            _ => panic!("Vec2: Out of bounds."),
+        }
     }
 }
 
 impl IndexMut<usize> for Vec2 {
     fn index_mut<'a>(&'a mut self, i: usize) -> &'a mut f64 {
-        &mut self.data[i]
+        match i {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            _ => panic!("Vec2: Out of bounds."),
+        }
     }
 }
 
@@ -191,9 +202,7 @@ impl Add for Vec2 {
 impl Neg for Vec2 {
     type Output = Self;
     fn neg(self) -> Self {
-        Self {
-            data: [-self[0], -self[1]],
-        }
+        v2![-self[0], -self[1]]
     }
 }
 
@@ -254,7 +263,7 @@ impl Div<Vec2> for Vec2 {
 
 impl Vec2 {
     pub fn zero() -> Self {
-        Self { data: [0., 0.] }
+        v2![0., 0.]
     }
     pub fn sqnorm(&self) -> f64 {
         self[0] * self[0] + self[1] * self[1]
@@ -275,10 +284,17 @@ impl Vec2 {
     }
 }
 
-pub fn intersection(p: Vec2, q: Vec2, u: Vec2, v: Vec2) -> Vec2 {
-    let d = (v[1] - u[1]) * (q[0] - p[0]) - (v[0] - u[0]) * (q[1] - p[1]);
-    let u_a = ((v[0] - u[0]) * (p[1] - u[1]) - (v[1] - u[1]) * (p[0] - u[0])) / d;
-    p + u_a * v2![q[0] - p[0], q[1] - p[1]]
+pub fn intersection(p1: Vec2, q1: Vec2, p2: Vec2, q2: Vec2) -> Vec2 {
+    let d = (q2.y - p2.y) * (q1.x - p1.x) - (q2.x - p2.x) * (q1.y - p1.y);
+    // let d = (v[1] - u[1]) * (q[0] - p[0]) - (v[0] - u[0]) * (q[1] - p[1]);
+    let u_a = ((q2.x - p2.x) * (p1.y - p2.y) - (q2.y - p2.y) * (p1.x - p2.x)) / d;
+    // let u_a = ((v[0] - u[0]) * (p[1] - u[1]) - (v[1] - u[1]) * (p[0] - u[0])) / d;
+    // const uB = ((q1.x - p1.x) * (p1.y - p2.y) - (q1.y - p1.y) * (p1.x - p2.x)) / d;
+
+    return v2![p1.x + u_a * (q1.x - p1.x), p1.y + u_a * (q1.y - p1.y)];
+    // debug!("Value of d: {}", d);
+    // debug!("Value of u_a: {}", u_a);
+    // p + v2![u_a * (q[0] - p[0]), u_a * (q[1] - p[1])]
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -504,7 +520,7 @@ impl Affine2 {
         self.trans *= m;
     }
     pub fn rot_about(ang: f64, v: Vec2) -> Self {
-        Self::from_trans(v) * (Self::from_rot(ang) * Self::from_trans(v))
+        Self::from_trans(v) * (Self::from_rot(ang) * Self::from_trans(-v))
     }
     pub fn inv(self) -> Affine2 {
         Affine2 {
@@ -524,21 +540,21 @@ impl Affine2 {
     }
 }
 
-fn vec2_sum(vecs: impl IntoIterator<Item = Vec2>) -> Vec2
-where
-{
-    vecs.into_iter().reduce(|a, b| a + b).unwrap()
-}
+// pub fn vec2_sum<'a>(vecs: &'a impl IntoIterator<Item = Vec2>) -> Vec2
+// where
+// {
+//     vecs.into_iter().reduce(|a, b| a + b).unwrap()
+// }
 
-fn centroid<T>(vecs: impl IntoIterator<Item = Vec2> + Clone) -> Vec2
-where
-    T: IntoIterator,
-{
-    let s: Vec2 = vec2_sum(vecs.clone());
-    let size = vecs.into_iter().count() as f64;
-    s / size
-}
-
+// fn centroid<T>(vecs: impl IntoIterator<Item = Vec2> + Clone) -> Vec2
+// where
+//     T: IntoIterator,
+// {
+//     let s: Vec2 = vec2_sum(vecs.clone());
+//     let size = vecs.into_iter().count() as f64;
+//     s / size
+// }
+//
 #[derive(Copy, Clone, Debug)]
 pub struct Point {
     pub p: Vec2,

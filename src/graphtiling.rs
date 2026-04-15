@@ -1,5 +1,9 @@
 use log::{debug, error, info, trace, warn};
-use std::ops::{Add, AddAssign, Div, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::{
+    cell::{Ref, RefCell},
+    ops::{Add, AddAssign, Div, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
+    rc::Rc,
+};
 
 macro_rules! commutative {
     ($op:ident, $opfunc:ident, $my_type:ty, $output_type:ty, $func:ident) => {
@@ -25,6 +29,31 @@ macro_rules! commutative {
         }
     };
 }
+
+pub struct SharedPtr<T> {
+    pub t: Option<Rc<RefCell<T>>>,
+}
+
+impl<T> SharedPtr<T> {
+    pub fn unwrap(self) -> Rc<RefCell<T>> {
+        self.t.as_ref().unwrap().clone()
+    }
+}
+
+// pub enum SharedPtr<T> {
+//     None,
+//     Some(Rc<RefCell<T>>),
+// }
+
+// impl<T> SharedPtr<T> {
+//     #[inline]
+//     pub fn unwrap(self) -> Rc<RefCell<T>> {
+//         match self {
+//             SharedPtr::Some(val) => val,
+//             SharedPtr::None => panic!("Called SharedPtr::unwrap on a 'None' value"),
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 pub struct Node<T> {
